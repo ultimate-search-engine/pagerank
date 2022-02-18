@@ -1,0 +1,28 @@
+POST http://localhost:8083/pagerankByUrl
+Content-Type: application/json
+
+{
+  "url": "https://developer.mozilla.org/en-US",
+  "computeId": "1"
+}
+
+###
+POST http://localhost:8083/pagerankByNotMatchingComputeRoundId
+Content-Type: application/json
+
+{
+  "computeId": 15,
+  "maxCount": 2000
+}
+
+### 4.9038682606661075
+POST http://localhost:8083/predictPagerank
+Content-Type: application/json
+
+{
+  "url": "https://github.com/mdn/yari/issues/new",
+  "doneId": 1
+}
+
+###
+
