@@ -12,7 +12,7 @@ fun Double.round(decimals: Int): Double {
 }
 
 class ElasticPagerank(
-    private val oldElastic: Elastic, private val newElastic: Elastic, private val defaultIndex: String
+    private val oldElastic: Elastic, private val newElastic: Elastic, private val defaultIndex: String, private val batchSize: Long = 400
 ) {
 
     private suspend fun switchAliasesAndDeleteOldIndex() {
@@ -31,8 +31,8 @@ class ElasticPagerank(
     }
 
     suspend fun transferNormalizedDocs() = coroutineScope {
-        val batchSize: Long = 100
         var pagination: Long = 0
+        var lastUrl: String? = null
 
         val allDocsCount = oldElastic.getAllDocsCount()
         newElastic.putMapping()
@@ -40,20 +40,21 @@ class ElasticPagerank(
         do {
             println(
                 "Normalization batch: $pagination - ~${
-                    ((pagination * batchSize).toDouble() / allDocsCount * 100).round(
-                        2
-                    )
+                    ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
                 }%"
             )
 
-            val docs = oldElastic.getDocs(batchSize, pagination * batchSize)
+            val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
+            val docs = res.await().hits().hits()
+
+            lastUrl = docs?.lastOrNull()?.source()?.address?.url
 
             docs?.mapNotNull {
                 val source = it.source()
                 if (source != null) {
                     launch(Dispatchers.Unconfined) {
                         source.inferredData.ranks.pagerank = 1.0 / allDocsCount
-                        launch(Dispatchers.Unconfined) { newElastic.indexPage(source) }.join()
+                        newElastic.indexPage(source)
                     }
                 } else null
             }?.map { it.join() }
@@ -76,40 +77,40 @@ class ElasticPagerank(
         newMapping.await()
 
         val pagerankCompute = PagerankCompute(oldElastic)
-        val batchSize: Long = 400
         var pagination: Long = 0
 
-        (0..(allDocsCount / batchSize)).map {
+        var lastUrl: String? = null
+
+        do {
             println("Pagerank batch: $pagination - ~${((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)}%")
 
-            val res = async { oldElastic.getDocs(batchSize, pagination * batchSize) }
-            val docs = res.await()
+            val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
+            val docs = res.await().hits().hits()
+
+            lastUrl = docs?.lastOrNull()?.source()?.address?.url
 
             docs?.mapNotNull { doc ->
                 val source = doc.source()
                 if (source != null) {
                     launch(Dispatchers.Unconfined) {
                         // print("${source.inferredData.ranks.pagerank} - ${source.address.url} ")
-                        var pagerank = withContext(Dispatchers.Default) {
-                            pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
-                        }
+                        var pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
+
                         if (pagerank.isNaN()) {
-                            // cause most likely is that the backlink is indexed more than once
+                            // cause most likely is that the backlink is indexed more than once and the integrity is broken
                             println("Pagerank of ${source.address.url} is NaN, substituting with previous value ${source.inferredData.ranks.pagerank}")
                             pagerank = source.inferredData.ranks.pagerank
                         }
                         source.inferredData.ranks.pagerank = pagerank
-                        source.inferredData.ranks.smartRank = pagerank
+                        source.inferredData.ranks.smartRank = pagerank * allDocsCount
 //                        println("doc id: ${doc.id()} pagerank: $pagerank, url: ${source.address.url}")
                         // println("pagerank: $pagerank")
-                        withContext(Dispatchers.Default) {
-                            newElastic.indexPage(source)
-                        }
+                        newElastic.indexPage(source)
                     }
                 } else null
             }?.forEach { it.join() }
             pagination += 1
-        }
+        } while (docs?.isNotEmpty() == true)
 
         switchAliasesAndDeleteOldIndex()
     }
