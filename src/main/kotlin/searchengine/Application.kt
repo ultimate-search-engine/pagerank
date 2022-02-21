@@ -22,10 +22,6 @@ suspend fun main() = runBlocking {
         println("\nIteration $i")
         elasticRank().doPagerankIteration()
     }
-//    elasticShenanigans.transferNormalizedDocs()
 
     println("done")
 }
-
-data class RankAndDocDeferred(val doc: Hit<Page.PageType>, val pagerank: Deferred<Double>)
-data class RankAndDoc(val doc: Hit<Page.PageType>, val pagerank: Double)
