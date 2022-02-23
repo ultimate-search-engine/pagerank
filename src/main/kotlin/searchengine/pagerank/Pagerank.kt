@@ -1,7 +1,6 @@
 package searchengine.pagerank
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import libraries.Elastic
@@ -9,21 +8,15 @@ import libraries.Page
 import libraries.cleanUrl
 
 class PagerankCompute(private val elastic: Elastic) {
-    private suspend fun getBackDocs(backLinks: List<Page.BackLink>) = coroutineScope {
-        val backDocsAsync = backLinks.map {
-            async {
-                elastic.docsByUrlOrNull(cleanUrl(it.source), 10)
-            }
-        }
-        return@coroutineScope backDocsAsync.mapNotNull {
-            it.await()?.firstOrNull()
-        }
-    }
+
+    private fun getBackDocs(backLinks: List<Page.BackLink>) =
+        elastic.docsByUrlOrNullBulk(backLinks.map {it.source}, 10)
 
     private fun backRank(doc: Page.PageType, backDocs: List<Page.PageType>): Double {
         return backDocs.sumOf { backDoc ->
             val linkCount = backDoc.body.links.internal.count() + backDoc.body.links.external.count()
-            val sameLinkCount = backDoc.body.links.internal.count { it.href == doc.address.url } + backDoc.body.links.external.count { it.href == doc.address.url }
+            val sameLinkCount =
+                backDoc.body.links.internal.count { it.href == doc.address.url } + backDoc.body.links.external.count { it.href == doc.address.url }
             (backDoc.inferredData.ranks.pagerank / linkCount) * sameLinkCount
         }
     }
@@ -36,10 +29,10 @@ class PagerankCompute(private val elastic: Elastic) {
 
     suspend fun getPagerank(doc: Page.PageType, globalSinkRank: Double, allDocCount: Long): Double = coroutineScope {
         val backDocs = withContext(Dispatchers.Default) {
-            doc.inferredData.backLinks.let { it1 ->
-                getBackDocs(it1)
+            doc.inferredData.backLinks.let {
+                getBackDocs(it)
             }
-        }
+        }?.responses()?.mapNotNull { it.result().hits().hits().firstOrNull() } ?: listOf()
         val globalInfluence = getGlobalPagerankInfluenceOnDoc(doc, globalSinkRank, allDocCount)
         val backRank = backRank(doc, backDocs.mapNotNull { it.source() })
         return@coroutineScope backRank + globalInfluence

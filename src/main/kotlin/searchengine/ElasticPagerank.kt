@@ -12,7 +12,10 @@ fun Double.round(decimals: Int): Double {
 }
 
 class ElasticPagerank(
-    private val oldElastic: Elastic, private val newElastic: Elastic, private val defaultIndex: String, private val batchSize: Long = 400
+    private val oldElastic: Elastic,
+    private val newElastic: Elastic,
+    private val defaultIndex: String,
+    private val batchSize: Long = 400
 ) {
 
     private suspend fun switchAliasesAndDeleteOldIndex() {
@@ -30,7 +33,7 @@ class ElasticPagerank(
         newElastic.alias.create(defaultIndex)
     }
 
-    suspend fun transferNormalizedDocs() = coroutineScope {
+    suspend fun normalizeDocs() = coroutineScope {
         var pagination: Long = 0
         var lastUrl: String? = null
 
@@ -49,19 +52,23 @@ class ElasticPagerank(
 
             lastUrl = docs?.lastOrNull()?.source()?.address?.url
 
-            docs?.mapNotNull {
+            val doneDocs = docs?.mapNotNull {
                 val source = it.source()
                 if (source != null) {
-                    launch(Dispatchers.Unconfined) {
+                    async (Dispatchers.Unconfined) {
                         source.inferredData.ranks.pagerank = 1.0 / allDocsCount
-                        newElastic.indexPage(source)
+                        source.inferredData.ranks.smartRank = 1.0 / allDocsCount
+                        source
                     }
                 } else null
-            }?.map { it.join() }
+            }?.map { it.await() }
+
+            if (doneDocs != null && doneDocs.isNotEmpty()) {
+                newElastic.indexDocsBulk(doneDocs)
+            }
 
             pagination += 1
         } while (docs?.isNotEmpty() == true)
-
 
         switchAliasesAndDeleteOldIndex()
 
@@ -82,33 +89,36 @@ class ElasticPagerank(
         var lastUrl: String? = null
 
         do {
-            println("Pagerank batch: $pagination - ~${((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)}%")
+            val doneFrom = (pagination * batchSize).toDouble() / allDocsCount
+            println("Pagerank batch: $pagination - ~${(doneFrom * 100).round(2)}%")
 
             val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
             val docs = res.await().hits().hits()
 
             lastUrl = docs?.lastOrNull()?.source()?.address?.url
 
-            docs?.mapNotNull { doc ->
-                val source = doc.source()
-                if (source != null) {
-                    launch(Dispatchers.Unconfined) {
-                        // print("${source.inferredData.ranks.pagerank} - ${source.address.url} ")
+            val doneDocs = docs?.mapNotNull { doc ->
+                async (Dispatchers.Unconfined) {
+                    val source = doc.source()
+                    if (source != null) {
                         var pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
 
                         if (pagerank.isNaN()) {
-                            // cause most likely is that the backlink is indexed more than once and the integrity is broken
+                            // cause most likely is that the backlink is indexed more than once
                             println("Pagerank of ${source.address.url} is NaN, substituting with previous value ${source.inferredData.ranks.pagerank}")
                             pagerank = source.inferredData.ranks.pagerank
                         }
                         source.inferredData.ranks.pagerank = pagerank
                         source.inferredData.ranks.smartRank = pagerank * allDocsCount
-//                        println("doc id: ${doc.id()} pagerank: $pagerank, url: ${source.address.url}")
-                        // println("pagerank: $pagerank")
-                        newElastic.indexPage(source)
-                    }
-                } else null
-            }?.forEach { it.join() }
+                        source
+                    } else null
+                }
+            }?.mapNotNull { it.await() }
+
+            if (doneDocs != null && doneDocs.isNotEmpty()) {
+                newElastic.indexDocsBulk(doneDocs)
+            }
+
             pagination += 1
         } while (docs?.isNotEmpty() == true)
 
