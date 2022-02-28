@@ -1,10 +1,7 @@
 package searchengine
 
 import co.elastic.clients.elasticsearch.core.search.Hit
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import libraries.Elastic
 import libraries.Page
 import searchengine.pagerank.PagerankCompute
@@ -20,6 +17,7 @@ class ElasticPagerank(
     private val oldElastic: Elastic,
     private val newElastic: Elastic,
     private val defaultIndex: String,
+    private val allDocsCount: Long,
     private val batchSize: Long = 400
 ) {
 
@@ -38,77 +36,59 @@ class ElasticPagerank(
         newElastic.alias.create(defaultIndex)
     }
 
-    suspend fun normalizeDocs(allDocsCount: Long, globalSinkRank: Double) = coroutineScope {
-        var pagination: Long = 0
-        var lastUrl: String? = null
 
+    suspend fun normalizeDocs() = coroutineScope {
         newElastic.putMapping()
+        var pagination: Long = 0
 
-        suspend fun doBatch(docs: List<Hit<Page.PageType>>): List<Page.PageType> {
+        fun doBatch(docs: List<Hit<Page.PageType>>): List<Page.PageType> {
             return docs.mapNotNull {
                 val source = it.source()
                 if (source != null) {
-                    async(Dispatchers.Unconfined) {
-                        source.inferredData.ranks.pagerank = 1.0 / allDocsCount
-                        source.inferredData.ranks.smartRank = 1.0 / allDocsCount
-                        source
-                    }
+                    source.inferredData.ranks.pagerank = 1.0 / allDocsCount
+                    source.inferredData.ranks.smartRank = 1.0 / allDocsCount
+                    source
                 } else null
-            }.map { it.await() }
+            }
         }
 
-        do {
-            println(
-                "Normalization batch: $pagination - ~${((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)}%")
+        iterateDocsInBatch { docs ->
+            val done = ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
+            println("Normalization batch: $pagination - ~$done%")
 
-            val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
-            val docs = res.await().hits().hits()
             val doneDocs = doBatch(docs)
-
-            if (doneDocs.isNotEmpty()) {
-                newElastic.indexDocsBulk(doneDocs)
-            }
-
-            lastUrl = docs?.lastOrNull()?.source()?.address?.url
+            if (doneDocs.isNotEmpty()) newElastic.indexDocsBulk(doneDocs)
 
             pagination += 1
-        } while (docs?.isNotEmpty() == true)
+        }
 
         switchAliasesAndDeleteOldIndex()
-
         println("Normalization done\n")
     }
 
 
-    suspend fun doPagerankIteration(allDocsCount: Long, globalSinkRank: Double) = coroutineScope {
+    suspend fun doPagerankIteration() = coroutineScope {
         val newMapping = async { newElastic.putMapping(4) }
+        val globalSinkRankAsync = async { oldElastic.getGlobalSinkRank() }
         newMapping.await()
+        val globalSinkRank = globalSinkRankAsync.await()
 
         val pagerankCompute = PagerankCompute(oldElastic)
         var pagination: Long = 0
 
-        var lastUrl: String? = null
-        var maxPagerankDiff = 0.0
+        val maxDiff: List<Double> = iterateDocsInBatch { docs ->
+            val done = ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
+            println("Batch: $pagination - ~$done%")
 
-        do {
-            val doneFrom = (pagination * batchSize).toDouble() / allDocsCount
-            println("Pagerank batch: $pagination - ~${(doneFrom * 100).round(2)}%")
-
-            val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
-            val docs = res.await().hits().hits()
-
-            lastUrl = docs?.lastOrNull()?.source()?.address?.url
-
-            val doneDocs = docs?.mapNotNull { doc ->
+            val doneDocs = docs.map { doc ->
                 async(Dispatchers.Unconfined) {
                     val source = doc.source()
                     if (source != null) {
-                        var pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
+                        val pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
 
                         if (pagerank.isNaN()) {
                             // cause most likely is that the backlink is indexed more than once
-                            println("Pagerank of ${source.address.url} is NaN, substituting with previous value ${source.inferredData.ranks.pagerank}")
-                            pagerank = source.inferredData.ranks.pagerank
+                            println("Pagerank of ${source.address.url} is NaN, the database is probably corrupted")
                         }
                         val pagerankDiff = kotlin.math.abs(pagerank - source.inferredData.ranks.pagerank)
 
@@ -118,21 +98,34 @@ class ElasticPagerank(
                         PageAndPagerankDifference(source, pagerankDiff)
                     } else null
                 }
-            }?.mapNotNull { it.await() }
-
-            if (doneDocs != null && doneDocs.isNotEmpty()) {
-                newElastic.indexDocsBulk(doneDocs.map { it.page })
-                maxPagerankDiff = listOf(doneDocs.maxOf { it.pagerankDifference }).maxOf { it }
-            }
+            }.mapNotNull { it.await() }
 
             pagination += 1
-        } while (docs?.isNotEmpty() == true)
+
+            if (doneDocs.isNotEmpty()) newElastic.indexDocsBulk(doneDocs.map { it.page })
+            return@iterateDocsInBatch doneDocs.maxOf { it.pagerankDifference }
+        }
 
         switchAliasesAndDeleteOldIndex()
-
-        return@coroutineScope maxPagerankDiff
+        return@coroutineScope maxDiff.maxOf { it }
     }
 
     data class PageAndPagerankDifference(val page: Page.PageType, val pagerankDifference: Double)
 
+
+    private suspend fun <T> iterateDocsInBatch(function: suspend (docs: List<Hit<Page.PageType>>) -> T): List<T> =
+        coroutineScope {
+            var lastUrl: String? = null
+            val results = mutableListOf<T>()
+
+            do {
+                val res = async { oldElastic.searchAfterUrl(batchSize, lastUrl) }
+                val docs = res.await().hits().hits()
+
+                lastUrl = docs?.lastOrNull()?.source()?.address?.url
+                if (docs.isNotEmpty()) results.add(function(docs))
+            } while (docs?.isNotEmpty() == true)
+
+            return@coroutineScope results
+        }
 }
