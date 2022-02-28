@@ -1,30 +1,54 @@
 package searchengine
 
-import kotlinx.coroutines.*
-import libraries.*
-import kotlin.system.measureTimeMillis
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import libraries.Address
+import libraries.Credentials
+import libraries.Elastic
+import kotlin.time.Duration
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTimedValue
+
+const val INDEX_NAME = "search"
+const val PRECISION = 0.001 // lower is more precise
 
 fun elasticRank(): ElasticPagerank {
-    val esOld = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), "search")
-    val esNew = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), "search${System.currentTimeMillis()}")
-    return ElasticPagerank(esOld, esNew, "search", 1200)
+    val esOld = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), INDEX_NAME)
+    val esNew =
+        Elastic(
+            Credentials("elastic", "testerino"),
+            Address("localhost", 9200),
+            "$INDEX_NAME${System.currentTimeMillis()}"
+        )
+    return ElasticPagerank(esOld, esNew, INDEX_NAME, 200)
 }
 
+@OptIn(ExperimentalTime::class)
 suspend fun main() = runBlocking {
-    println("Starting...") // single iteration
+    println("Starting...")
     println("This might take a while...")
-    val esOld = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), "search")
-    println(esOld.getAllDocsCount())
+    val es = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), INDEX_NAME)
 
-//    elasticRank().normalizeDocs()
+    val globalSinkRank = withContext(Dispatchers.Default) { es.getGlobalSinkRank() }
+    val allDocsCount = withContext(Dispatchers.Default) { es.getAllDocsCount() }
 
-    for (i in 0..10) {
-        println("\nIteration $i")
-        val time = measureTimeMillis {
-            elasticRank().doPagerankIteration()
-        }
-        println("Iteration took ${time / 1000}s")
+    println("$allDocsCount documents in total")
+    println("Targeted maximal pagerank difference: ${(1.0 / allDocsCount) * PRECISION}\n")
+
+    elasticRank().normalizeDocs(allDocsCount, globalSinkRank)
+    var i = 0
+
+    val time = measureTimedValue {
+        do {
+            i += 1
+            val (maxPagerankDiff: Double, time: Duration) = measureTimedValue {
+                elasticRank().doPagerankIteration(allDocsCount, globalSinkRank)
+            }
+            println("\nMaximal pagerank difference: $maxPagerankDiff")
+            println("Iteration took ${time.inWholeMinutes}min ${time.inWholeSeconds % 60}s\n\n")
+        } while (maxPagerankDiff > (1.0 / allDocsCount) * PRECISION)
     }
 
-    println("done")
+    println("done, $i iterations, took: ${time.duration.inWholeMinutes}min ${time.duration.inWholeSeconds % 60}s")
 }
