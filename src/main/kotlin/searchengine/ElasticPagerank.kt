@@ -39,7 +39,6 @@ class ElasticPagerank(
 
     suspend fun normalizeDocs() = coroutineScope {
         newElastic.putMapping()
-        var pagination: Long = 0
 
         fun doBatch(docs: List<Hit<Page.PageType>>): List<Page.PageType> {
             return docs.mapNotNull {
@@ -52,14 +51,12 @@ class ElasticPagerank(
             }
         }
 
-        iterateDocsInBatch { docs ->
+        iterateDocsInBatch { docs, pagination ->
             val done = ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
             println("Normalization batch: $pagination - ~$done%")
 
             val doneDocs = doBatch(docs)
             if (doneDocs.isNotEmpty()) newElastic.indexDocsBulk(doneDocs)
-
-            pagination += 1
         }
 
         switchAliasesAndDeleteOldIndex()
@@ -74,14 +71,13 @@ class ElasticPagerank(
         val globalSinkRank = globalSinkRankAsync.await()
 
         val pagerankCompute = PagerankCompute(oldElastic)
-        var pagination: Long = 0
 
-        val maxDiff: List<Double> = iterateDocsInBatch { docs ->
+        val maxDiff: List<Double> = iterateDocsInBatch { docs, pagination ->
             val done = ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
             println("Batch: $pagination - ~$done%")
 
             val doneDocs = docs.map { doc ->
-                async(Dispatchers.Unconfined) {
+                async (Dispatchers.Unconfined) {
                     val source = doc.source()
                     if (source != null) {
                         val pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
@@ -100,8 +96,6 @@ class ElasticPagerank(
                 }
             }.mapNotNull { it.await() }
 
-            pagination += 1
-
             if (doneDocs.isNotEmpty()) newElastic.indexDocsBulk(doneDocs.map { it.page })
             return@iterateDocsInBatch doneDocs.maxOf { it.pagerankDifference }
         }
@@ -113,9 +107,10 @@ class ElasticPagerank(
     data class PageAndPagerankDifference(val page: Page.PageType, val pagerankDifference: Double)
 
 
-    private suspend fun <T> iterateDocsInBatch(function: suspend (docs: List<Hit<Page.PageType>>) -> T): List<T> =
+    private suspend fun <T> iterateDocsInBatch(function: suspend (docs: List<Hit<Page.PageType>>, pagination: Long) -> T): List<T> =
         coroutineScope {
             var lastUrl: String? = null
+            var pagination: Long = 0
             val results = mutableListOf<T>()
 
             do {
@@ -123,7 +118,9 @@ class ElasticPagerank(
                 val docs = res.await().hits().hits()
 
                 lastUrl = docs?.lastOrNull()?.source()?.address?.url
-                if (docs.isNotEmpty()) results.add(function(docs))
+                if (docs.isNotEmpty()) results.add(function(docs, pagination))
+
+                pagination += 1
             } while (docs?.isNotEmpty() == true)
 
             return@coroutineScope results

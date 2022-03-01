@@ -1,13 +1,18 @@
 package searchengine.pagerank
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import libraries.Elastic
 import libraries.Page
 
 class PagerankCompute(private val elastic: Elastic) {
 
-    private fun getBackDocs(backLinks: List<Page.BackLink>) =
-        elastic.docsByUrlOrNullBulk(backLinks.map { it.source }, 10)
+    private suspend fun getBackDocs(backLinks: List<Page.BackLink>) = coroutineScope {
+        withContext(Dispatchers.Unconfined) {
+            elastic.docsByUrlOrNullBulk(backLinks.map { it.source }, 10)
+        }
+    }
 
     private fun backRank(doc: Page.PageType, backDocs: List<Page.PageType>): Double {
         return backDocs.sumOf { backDoc ->
