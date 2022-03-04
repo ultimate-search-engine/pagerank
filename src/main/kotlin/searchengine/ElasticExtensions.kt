@@ -9,7 +9,6 @@ import libraries.Elastic
 import libraries.Page
 
 
-// extension method on Elastic
 suspend fun Elastic.getGlobalSinkRank(): Double = coroutineScope {
     val search: SearchResponse<Page.PageType> = withContext(Dispatchers.Default) {
         search(SearchRequest.of {

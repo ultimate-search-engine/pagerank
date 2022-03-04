@@ -1,7 +1,9 @@
 package searchengine
 
 import co.elastic.clients.elasticsearch.core.search.Hit
-import kotlinx.coroutines.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import libraries.Elastic
 import libraries.Page
 import searchengine.pagerank.PagerankCompute
@@ -22,7 +24,7 @@ class ElasticPagerank(
 ) {
 
     private suspend fun switchAliasesAndDeleteOldIndex() {
-        val oldAliasIndex = oldElastic.alias.getIndexByAlias(defaultIndex)
+        val oldIndex = oldElastic.alias.getIndexByAlias(defaultIndex)
 
         try {
             oldElastic.alias.delete(defaultIndex)
@@ -30,9 +32,9 @@ class ElasticPagerank(
             println("Alias not found")
         }
 
-        delay(1000)
+        delay(1500)
 
-        oldAliasIndex.forEach { oldElastic.deleteIndex(it) }
+        oldIndex.forEach { oldElastic.deleteIndex(it) }
         newElastic.alias.create(defaultIndex)
     }
 
@@ -65,36 +67,36 @@ class ElasticPagerank(
 
 
     suspend fun doPagerankIteration() = coroutineScope {
-        val newMapping = async { newElastic.putMapping(4) }
+        val newMapping = async { newElastic.putMapping(6) }
         val globalSinkRankAsync = async { oldElastic.getGlobalSinkRank() }
         newMapping.await()
         val globalSinkRank = globalSinkRankAsync.await()
 
-        val pagerankCompute = PagerankCompute(oldElastic)
+        val pagerankCompute = PagerankCompute()
 
         val maxDiff: List<Double> = iterateDocsInBatch { docs, pagination ->
             val done = ((pagination * batchSize).toDouble() / allDocsCount * 100).round(2)
             println("Batch: $pagination - ~$done%")
 
-            val doneDocs = docs.map { doc ->
-                async (Dispatchers.Unconfined) {
-                    val source = doc.source()
-                    if (source != null) {
-                        val pagerank = pagerankCompute.getPagerank(source, globalSinkRank, allDocsCount)
+            val backDocs = getBatchBackDocsAsMap(docs)
 
-                        if (pagerank.isNaN()) {
-                            // cause most likely is that the backlink is indexed more than once
-                            println("Pagerank of ${source.address.url} is NaN, the database is probably corrupted")
-                        }
-                        val pagerankDiff = kotlin.math.abs(pagerank - source.inferredData.ranks.pagerank)
+            val doneDocs = docs.mapNotNull { doc ->
+                val source = doc.source()
+                if (source != null) {
+                    val pagerank = pagerankCompute.getPagerank(source, backDocs, globalSinkRank, allDocsCount)
 
-                        source.inferredData.ranks.pagerank = pagerank
-                        source.inferredData.ranks.smartRank = pagerank * allDocsCount
+                    if (pagerank.isNaN()) {
+                        // cause most likely is that the backlink is indexed more than once
+                        println("Pagerank of ${source.address.url} is NaN, the database is probably corrupted")
+                    }
+                    val pagerankDiff = kotlin.math.abs(pagerank - source.inferredData.ranks.pagerank)
 
-                        PageAndPagerankDifference(source, pagerankDiff)
-                    } else null
-                }
-            }.mapNotNull { it.await() }
+                    source.inferredData.ranks.pagerank = pagerank
+                    source.inferredData.ranks.smartRank = pagerank * allDocsCount
+
+                    PageAndPagerankDifference(source, pagerankDiff)
+                } else null
+            }
 
             if (doneDocs.isNotEmpty()) newElastic.indexDocsBulk(doneDocs.map { it.page })
             return@iterateDocsInBatch doneDocs.maxOf { it.pagerankDifference }
@@ -102,6 +104,15 @@ class ElasticPagerank(
 
         switchAliasesAndDeleteOldIndex()
         return@coroutineScope maxDiff.maxOf { it }
+    }
+
+    private fun getBatchBackDocsAsMap(docs: List<Hit<Page.PageType>>): Map<String, Page.PageType> {
+        val links =
+            docs.mapNotNull { doc -> doc.source()?.inferredData?.backLinks?.map { it.source } }.flatten().distinct()
+        val backDocs = oldElastic.docsByUrlOrNullBulk(links)
+        val responses =
+            backDocs?.responses()?.mapNotNull { it.result().hits().hits().firstOrNull()?.source() } ?: emptyList()
+        return responses.associateBy { it.address.url }
     }
 
     data class PageAndPagerankDifference(val page: Page.PageType, val pagerankDifference: Double)
