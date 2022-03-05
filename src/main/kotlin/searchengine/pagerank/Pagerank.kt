@@ -20,16 +20,16 @@ class PagerankCompute {
                 (allDocCount - (if (isSinkPage) 1 else 0))
     }
 
-    suspend fun getPagerank(
-        doc: Page.PageType,
+    fun getPagerank(
+        page: Page.PageType,
         backDocs: Map<String, Page.PageType>,
         globalSinkRank: Double,
         allDocCount: Long
-    ): Double = coroutineScope {
-        val bd = doc.inferredData.backLinks.mapNotNull { backDocs[it.source] }
-        val globalInfluence = getGlobalPagerankInfluenceOnDoc(doc, globalSinkRank, allDocCount)
-        val backRank = backRank(doc, bd)
-        return@coroutineScope backRank + globalInfluence
+    ): Double {
+        val bd = page.inferredData.backLinks.mapNotNull { backDocs[it.source] }
+        val globalInfluence = getGlobalPagerankInfluenceOnDoc(page, globalSinkRank, allDocCount)
+        val backRank = backRank(page, bd)
+        return backRank + globalInfluence
     }
 
 //    fun getSmartRank(doc: PageType, backDocks: List<PageType>): Double {

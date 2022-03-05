@@ -6,53 +6,37 @@ import kotlinx.coroutines.withContext
 import libraries.Address
 import libraries.Credentials
 import libraries.Elastic
-import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
+import kotlin.time.TimedValue
 import kotlin.time.measureTimedValue
 
 const val INDEX_NAME = "search"
-const val PRECISION = 0.5 // lower means higher precision
+const val PRECISION = 0.042 // lower means higher precision
+const val PASSWORD = "0Se+4Stcs4VGWYBzLKip"
 
 fun elasticRank(allDocsCount: Long): ElasticPagerank {
-    val esOld = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), INDEX_NAME)
+    val esOld = Elastic(Credentials("elastic", PASSWORD), Address("10.0.0.33", 9200), INDEX_NAME)
     val esNew = Elastic(
-        Credentials("elastic", "testerino"),
-        Address("localhost", 9200),
+        Credentials("elastic", PASSWORD),
+        Address("10.0.0.33", 9200),
         "$INDEX_NAME${System.currentTimeMillis()}"
     )
-    return ElasticPagerank(esOld, esNew, INDEX_NAME, allDocsCount, 600)
+    return ElasticPagerank(esOld, esNew, INDEX_NAME, allDocsCount, 10_000)
 }
 
 @OptIn(ExperimentalTime::class)
 suspend fun main() = runBlocking {
     println("Starting...")
 
-    val es = Elastic(Credentials("elastic", "testerino"), Address("localhost", 9200), INDEX_NAME)
+    val es = Elastic(Credentials("elastic", PASSWORD), Address("10.0.0.33", 9200), INDEX_NAME)
     val allDocsCount = withContext(Dispatchers.Default) { es.getAllDocsCount() }
 
     println("$allDocsCount documents in total")
     val targetDeviation = (1.0 / allDocsCount) * PRECISION
     println("Targeted pagerank precision: $targetDeviation\n")
 
-    elasticRank(allDocsCount).normalizeDocs()
-
-    var i = 0
-    val time = measureTimedValue {
-        do {
-            val (maxPagerankDiff: Double, time: Duration) = measureTimedValue {
-                elasticRank(allDocsCount).doPagerankIteration()
-            }
-            println(
-                "\nHighest pagerank deviation: $maxPagerankDiff / $targetDeviation, (${
-                    ((maxPagerankDiff / targetDeviation) * 100).round(
-                        2
-                    )
-                }%)"
-            )
-            println("Iteration $i took ${time.inWholeMinutes}min ${time.inWholeSeconds % 60}s\n\n")
-            i += 1
-        } while (maxPagerankDiff > (1.0 / allDocsCount) * PRECISION)
+    val time: TimedValue<Unit> = measureTimedValue {
+        elasticRank(allDocsCount).computePagerank(ElasticPagerank.ComputeMethod.InMemory)
     }
-
-    println("done, $i iterations, took: ${time.duration.inWholeMinutes}min ${time.duration.inWholeSeconds % 60}s")
+    println("Done, took: ${time.duration.inWholeMinutes}min ${time.duration.inWholeSeconds % 60}s")
 }
