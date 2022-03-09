@@ -1,9 +1,7 @@
 package searchengine
 
 import co.elastic.clients.elasticsearch.core.search.Hit
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import libraries.Elastic
 import libraries.Page
 import searchengine.pagerank.PagerankCompute
@@ -27,7 +25,7 @@ class ElasticPagerank(
     private val batchSize: Long = 400
 ) {
 
-    private val targetDeviation = (1.0 / allDocsCount) * PRECISION
+    private val targetDeviation = (1.0 / allDocsCount) * Precision
 
     enum class ComputeMethod {
         BatchDocs,
@@ -96,7 +94,7 @@ class ElasticPagerank(
             )
             println("Iteration $i took ${time.inWholeMinutes}min ${time.inWholeSeconds % 60}s\n\n")
             i += 1
-        } while (maxPagerankDiff > (1.0 / allDocsCount) * PRECISION)
+        } while (maxPagerankDiff > (1.0 / allDocsCount) * Precision)
 
     }
 
@@ -186,9 +184,12 @@ class ElasticPagerank(
 
         } while (maxDiff > targetDeviation)
 
-        docsMap.toList().map { it.second }.chunked(10_000).forEachIndexed { i, it ->
-            println("Indexed ${it.size * i} - ${((it.size * i).toDouble() / allDocsCount * 100).round(2)}% docs")
-            newElastic.indexDocsBulk(it)
+        withContext(NonCancellable) {
+            docsMap.toList().map { it.second }.chunked(10_000).forEachIndexed { i, it ->
+                println("Indexed ${it.size * i} - ${((it.size * i).toDouble() / allDocsCount * 100).round(2)}% docs")
+                newElastic.indexDocsBulk(it)
+            }
+            switchAliasesAndDeleteOldIndex()
         }
     }
 

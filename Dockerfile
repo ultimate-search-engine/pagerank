@@ -1,5 +1,4 @@
-FROM openjdk:8-jdk
-EXPOSE 8080:8080
+FROM openjdk:16-jdk
 RUN mkdir /app
 COPY ./build/install/pagerank /app/
 WORKDIR /app/bin
