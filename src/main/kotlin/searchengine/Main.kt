@@ -5,10 +5,15 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.channels.produce
+import libraries.Address
+import libraries.Credentials
+import libraries.Elastic
 import libraries.PageRepository
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import searchengine.searchIndexer.ElasticIndexer
 import kotlin.math.roundToInt
+import kotlin.system.exitProcess
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.TimedValue
@@ -21,15 +26,24 @@ const val Precision = 0.0
 
 @OptIn(ExperimentalTime::class)
 suspend fun main(): Unit = runBlocking {
-    val dbClient = PageRepository.MongoClient("wiki2", "mongodb://localhost:27017")
+    val dbClient = PageRepository.MongoClient("wiki2", "mongodb://10.0.0.35:27017")
+    val elastic = Elastic(Credentials("elastic", ""), Address("10.0.0.35", 9200), "experimental")
+
+//    val dbClient = PageRepository.MongoClient("wiki2", "mongodb://localhost:27017")
 
     val time: TimedValue<Unit> = measureTimedValue {
         val pagerank = handlePagerankBuild(dbClient)
         pagerank.getAll().sortedByDescending { it.rank.last() }.take(30).forEach { if (!it.doesForward) println(it) }
         println(pagerank.getAll().sumOf { it.rank.last() })
+
+        elastic.deleteIndex()
+        elastic.putMapping()
+        val elasticIndexer = ElasticIndexer(pagerank, dbClient, elastic)
+        elasticIndexer.index()
     }
 
     println("Done, took: ${time.duration.inWholeMinutes}min ${time.duration.inWholeSeconds % 60}s")
+    exitProcess(0)
 }
 
 
@@ -38,12 +52,11 @@ suspend fun handlePagerankBuild(dbClient: PageRepository.Client) = coroutineScop
 
     repositoryDocs(dbClient).consumeEach {
         val parse = Jsoup.parse(it.content)
-        val links = parse.pageLinks(Url(it.finalUrl)).toSet()
+        val links = parse.pageLinks(Url(it.finalUrl))
 
         if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
 
-        val finalUrl = Url(it.finalUrl).cUrl()
-        everyLink.add(finalUrl)
+        everyLink.add(Url(it.finalUrl).cUrl())
         links.forEach(everyLink::add)
         it.targetUrl.forEach(everyLink::add)
     }
@@ -78,9 +91,9 @@ fun Document.pageLinks(url: Url): List<String> {
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 fun CoroutineScope.repositoryDocs(client: PageRepository.Client): ReceiveChannel<PageRepository.Page> =
-    produce(capacity = 600) {
-        val limit = 20_000
-        val batch = 500
+    produce(capacity = 300) {
+        val limit = 250
+        val batch = 250
 
         var lastUrl: String? = null
         var ctr = 0

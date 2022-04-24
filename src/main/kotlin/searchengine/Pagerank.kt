@@ -15,7 +15,11 @@ import kotlin.time.measureTimedValue
 class Pagerank(everyLink: Set<String>) {
 
     private val allLinks = everyLink.map { link ->
-        PagerankPage(link, mutableSetOf(), mutableListOf(1.0 / everyLink.size.toDouble()), 0, false)
+        val initialRank = 1.0 / everyLink.size.toDouble()
+        val page = PagerankPage(link, mutableListOf(), DoubleArray(2), 0, false)
+        page.rank[0] = initialRank
+        page.rank[1] = initialRank
+        page
     }.sortedBy { it.url }
 
 
@@ -25,7 +29,7 @@ class Pagerank(everyLink: Set<String>) {
             val time: TimedValue<Unit> = measureTimedValue {
 
                 val parsed = Jsoup.parse(doc.content)
-                val links = parsed.pageLinks(Url(doc.finalUrl)).toSet()
+                val links = parsed.pageLinks(Url(doc.finalUrl))
 
                 val finalLinkObj = allLinks[allLinks.binarySearch {
                     Url(it.url).cUrl().compareTo(Url(doc.finalUrl).cUrl())
@@ -38,18 +42,21 @@ class Pagerank(everyLink: Set<String>) {
                         val targetPage = get(targetUrl)!!
                         targetPage.doesForward = true
                         targetPage.forwardLinkCount += 1
-                        finalLinkObj.backLinks.add(targetPage)
+                        addBacklink(finalLinkObj, targetPage)
                     }
                 }
 
                 links.forEach { link ->
                     val linkedPage = get(link)!!
-                    linkedPage.backLinks.add(finalLinkObj)
+                    addBacklink(linkedPage, finalLinkObj)
                 }
             }
             if (time.duration.inWholeSeconds > 0) println("${doc.finalUrl} took ${time.duration}")
         }
     }
+
+
+    private fun addBacklink(page: PagerankPage, link: PagerankPage) = page.backLinks.add(link)
 
 
     infix fun get(url: String): PagerankPage? {
@@ -60,10 +67,10 @@ class Pagerank(everyLink: Set<String>) {
     fun getAll() = allLinks
 
     private fun globalSinkRank(iteration: Int): Double =
-        allLinks.sumOf { if (it.forwardLinkCount == 0) it.rank[iteration - 1] else 0.0 }
+        allLinks.sumOf { if (it.forwardLinkCount == 0) it.rank[0] else 0.0 }
 
     private fun computePagerankOnDoc(doc: PagerankPage, sinkRank: Double, iteration: Int): Double =
-        (1 - d) / allLinks.size + d * (doc.backLinks.sumOf { it.rank[iteration - 1] / it.forwardLinkCount } + sinkRank / allLinks.size)
+        (1 - d) / allLinks.size + d * (doc.backLinks.sumOf { it.rank[0] / it.forwardLinkCount } + sinkRank / allLinks.size)
 
 
     private fun computePagerankIteration(iteration: Int): Double {
@@ -77,9 +84,16 @@ class Pagerank(everyLink: Set<String>) {
 
             val deviation = abs(it.rank.last() - rank)
             if (deviation > highestDeviation) highestDeviation = deviation
-            it.rank.add(rank)
+            it.rank[1] = rank
         }
+        moveCalculatedRank()
         return highestDeviation
+    }
+
+    private fun moveCalculatedRank() {
+        allLinks.forEach {
+            it.rank[0] = it.rank[1]
+        }
     }
 
     @OptIn(ExperimentalTime::class)
@@ -87,26 +101,22 @@ class Pagerank(everyLink: Set<String>) {
         val (deviation: Double, duration: Duration) = measureTimedValue {
             computePagerankIteration(if (prevMetrics != null) prevMetrics.iteration + 1 else 1)
         }
-        val metrics = PagerankMetrics(deviation, (prevMetrics?.iteration ?: 0) + 1, duration, prevMetrics)
+        val metrics = PagerankMetrics(deviation, (prevMetrics?.iteration ?: 0) + 1, duration)
         println("Iteration ${metrics.iteration} deviation: ${metrics.highestDeviation} duration: ${metrics.time.inWholeMilliseconds}")
         return if (deviation > Precision && metrics.iteration < 200) run(metrics) else metrics
     }
 
     data class PagerankMetrics(
-        val highestDeviation: Double, val iteration: Int, val time: Duration, val previous: PagerankMetrics?
+        val highestDeviation: Double, val iteration: Int, val time: Duration
     )
 
     class PagerankPage(
         val url: String,
-        val backLinks: MutableSet<PagerankPage>,
-        var rank: MutableList<Double>,
+        val backLinks: MutableList<PagerankPage>,
+        var rank: DoubleArray = DoubleArray(2),
         var forwardLinkCount: Int,
         var doesForward: Boolean,
-    ) {
-        operator fun compareTo(other: PagerankPage) = url.compareTo(other.url)
-
-        override fun toString() = "$rank: $url"
-    }
+    )
 
 }
 
