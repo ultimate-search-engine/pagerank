@@ -1,12 +1,12 @@
 package searchengine.searchIndexer
 
-import io.ktor.http.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.coroutineScope
-import libraries.*
-import searchengine.Pagerank
-import searchengine.cUrl
-import searchengine.repositoryDocs
+import kotlinx.coroutines.channels.produce
+import libraries.Elastic
+import libraries.PageRepository
+import searchengine.pagerank.Pagerank
 import java.util.concurrent.atomic.AtomicInteger
 
 class ElasticIndexer(
@@ -15,12 +15,6 @@ class ElasticIndexer(
     private val elastic: Elastic
 ) {
     suspend fun index() = coroutineScope {
-//        pagerank.getAll().forEachIndexed { i, it ->
-//            println("At $i")
-//            if (!it.doesForward) {
-        // ...
-//            } else null
-//        }
         try {
             elastic.deleteIndex()
         } catch (e: Exception) {
@@ -28,23 +22,34 @@ class ElasticIndexer(
         }
         elastic.putMapping()
 
-        var i = AtomicInteger(0)
+        val count = AtomicInteger(0)
         val totalDocsCount = pagerank.getAll().size
 
-        pagerank.getAll().sortedByDescending { it.rank.last() }.chunked(6).forEach { chunk ->
-            chunk.forEach {
-                if (!it.doesForward) {
-                    val repoPage = repository.find(it.url).firstOrNull()
-                    if (repoPage != null) {
-                        println("Indexing ${i.incrementAndGet()}/$totalDocsCount: ${repoPage.finalUrl}")
-                        val xd = ComputeDoc(it, repoPage, repository).compute(totalDocsCount)
-                        elastic.add(xd)
-                    }
+
+        val flow = forEachPagerankPage(pagerank.getAll(), repository)
+        for (i in 1..6) {
+            launch(Dispatchers.Unconfined) {
+                flow.consumeEach {
+//                    println("$i Indexing ${count.incrementAndGet()}/$totalDocsCount: ${it.second.url}")
+                    if (count.getAndIncrement() % 200 == 0) println("At ${count.get()}/$totalDocsCount")
+                    val page = ComputeDoc(it.second, it.first, repository).compute(totalDocsCount)
+                    elastic.add(page)
                 }
             }
         }
+    }
+}
+
+
+@OptIn(ExperimentalCoroutinesApi::class)
+fun CoroutineScope.forEachPagerankPage(
+    pagerank: Array<Pagerank.PagerankPage>,
+    repository: PageRepository.Client
+): ReceiveChannel<Pair<PageRepository.Page?, Pagerank.PagerankPage>> =
+    produce(capacity = 4) {
+        pagerank.forEach {
+            val page = repository.find(it.url).firstOrNull()
+            send(page to it)
+        }
 
     }
-
-
-}

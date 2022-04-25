@@ -1,16 +1,45 @@
-package searchengine
+package searchengine.pagerank
 
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import libraries.PageRepository
 import org.jsoup.Jsoup
+import searchengine.Precision
+import searchengine.d
+import searchengine.utilities.pageLinks
+import searchengine.utilities.repositoryDocs
 import kotlin.math.abs
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.TimedValue
 import kotlin.time.measureTimedValue
 
+
+suspend fun handlePagerankBuild(
+    dbClient: PageRepository.Client,
+    useUncrawledLinks: Boolean = false // turned out to require a funny amount of memory
+) = coroutineScope {
+    val everyLink = mutableSetOf<String>()
+
+    repositoryDocs(dbClient).consumeEach {
+        if (useUncrawledLinks) {
+            val parse = Jsoup.parse(it.content)
+            val links = parse.pageLinks(Url(it.finalUrl))
+            if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
+            links.forEach(everyLink::add)
+        }
+
+        everyLink.add(Url(it.finalUrl).cUrl())
+        it.targetUrl.forEach(everyLink::add)
+    }
+    println("Found ${everyLink.size} total items")
+
+    val pagerank = Pagerank(everyLink)
+    pagerank.entangleDocs(dbClient)
+    pagerank.run()
+    return@coroutineScope pagerank
+}
 
 class Pagerank(everyLink: Set<String>) {
 
@@ -20,8 +49,28 @@ class Pagerank(everyLink: Set<String>) {
         page.rank[0] = initialRank
         page.rank[1] = initialRank
         page
-    }.sortedBy { it.url }
+    }.sortedBy { it.url }.toTypedArray()
 
+
+    private tailrec fun Array<PagerankPage>.binarySearchLinks(
+        url: Url,
+        x: Int = (allLinks.size - 1) / 2,
+        from: Int = 0,
+        to: Int = allLinks.size - 1
+    ): Int? {
+        if (x >= allLinks.size) return null
+        val comparable = url.cUrl().compareTo(Url(allLinks[x].url).cUrl())
+//        println("comparable: $comparable, x: $x, from: $from, to: $to")
+
+        return if (from > to) null
+        else if (comparable < 0) binarySearchLinks(url, (from + x) / 2, from, x - 1)
+        else if (comparable > 0) binarySearchLinks(url, (x + to) / 2 + 1, x + 1, to)
+        else if (url.cUrl() == allLinks[x].url) x
+        else {
+            println("null")
+            null
+        }
+    }
 
     @OptIn(ExperimentalTime::class)
     suspend fun entangleDocs(db: PageRepository.Client) = coroutineScope {
@@ -31,11 +80,8 @@ class Pagerank(everyLink: Set<String>) {
                 val parsed = Jsoup.parse(doc.content)
                 val links = parsed.pageLinks(Url(doc.finalUrl))
 
-                val finalLinkObj = allLinks[allLinks.binarySearch {
-                    Url(it.url).cUrl().compareTo(Url(doc.finalUrl).cUrl())
-                }].also {
-                    it.forwardLinkCount = links.size
-                }
+                val finalLinkObj = allLinks[allLinks.binarySearchLinks(Url(doc.finalUrl))!!]
+                assert(finalLinkObj.url == doc.finalUrl)
 
                 doc.targetUrl.forEach { targetUrl ->
                     if (Url(targetUrl).cUrl() != Url(doc.finalUrl).cUrl()) {
@@ -47,8 +93,12 @@ class Pagerank(everyLink: Set<String>) {
                 }
 
                 links.forEach { link ->
-                    val linkedPage = get(link)!!
-                    addBacklink(linkedPage, finalLinkObj)
+                    val linkedPage = get(link)
+                    if (linkedPage != null) {
+                        assert(linkedPage.url == link)
+                        finalLinkObj.forwardLinkCount += 1
+                        addBacklink(linkedPage, finalLinkObj)
+                    }
                 }
             }
             if (time.duration.inWholeSeconds > 0) println("${doc.finalUrl} took ${time.duration}")
@@ -60,24 +110,24 @@ class Pagerank(everyLink: Set<String>) {
 
 
     infix fun get(url: String): PagerankPage? {
-        val index = allLinks.binarySearch { Url(it.url).cUrl().compareTo(Url(url).cUrl()) }
+        val index = allLinks.binarySearchLinks(Url(url)) ?: return null
         return if (0 <= index && index < allLinks.size) allLinks[index] else null
     }
 
     fun getAll() = allLinks
 
-    private fun globalSinkRank(iteration: Int): Double =
+    private fun globalSinkRank(): Double =
         allLinks.sumOf { if (it.forwardLinkCount == 0) it.rank[0] else 0.0 }
 
-    private fun computePagerankOnDoc(doc: PagerankPage, sinkRank: Double, iteration: Int): Double =
+    private fun computePagerankOnDoc(doc: PagerankPage, sinkRank: Double): Double =
         (1 - d) / allLinks.size + d * (doc.backLinks.sumOf { it.rank[0] / it.forwardLinkCount } + sinkRank / allLinks.size)
 
 
-    private fun computePagerankIteration(iteration: Int): Double {
-        val sinkRank = globalSinkRank(iteration)
+    private fun computePagerankIteration(): Double {
+        val sinkRank = globalSinkRank()
         var highestDeviation = 0.0
         allLinks.forEach {
-            val rank = computePagerankOnDoc(it, sinkRank, iteration)
+            val rank = computePagerankOnDoc(it, sinkRank)
             if (rank == Double.POSITIVE_INFINITY) {
                 throw Exception("Rank is infinite")
             }
@@ -99,10 +149,10 @@ class Pagerank(everyLink: Set<String>) {
     @OptIn(ExperimentalTime::class)
     tailrec fun run(prevMetrics: PagerankMetrics? = null): PagerankMetrics {
         val (deviation: Double, duration: Duration) = measureTimedValue {
-            computePagerankIteration(if (prevMetrics != null) prevMetrics.iteration + 1 else 1)
+            computePagerankIteration()
         }
         val metrics = PagerankMetrics(deviation, (prevMetrics?.iteration ?: 0) + 1, duration)
-        println("Iteration ${metrics.iteration} deviation: ${metrics.highestDeviation} duration: ${metrics.time.inWholeMilliseconds}")
+        println("Iteration ${metrics.iteration} deviation: ${metrics.highestDeviation} duration: ${metrics.time.inWholeMilliseconds}ms")
         return if (deviation > Precision && metrics.iteration < 200) run(metrics) else metrics
     }
 
