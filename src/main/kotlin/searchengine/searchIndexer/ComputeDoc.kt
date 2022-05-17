@@ -11,19 +11,20 @@ import searchengine.pagerank.cUrl
 class ComputeDoc(
     private val pagerankPage: Pagerank.PagerankPage,
     repoDoc: PageRepository.Page?,
-    private val dbClient: PageRepository.Client
+    private val dbClient: PageRepository.Client,
+    private val totalDocsCount: Int
 ) {
     private val parse = if (repoDoc != null) Jsoup.parse(repoDoc.content) else null
     private val targetUrls = pagerankPage.backLinks.map { it.url } + pagerankPage.url
 
-    private suspend fun getBacklinkAnchorText() = pagerankPage.backLinks
-        .distinctBy { it.url }
-        .sortedByDescending { it.rank.last() }
-        .take(690)
-        .mapNotNull {
-            val searchedRepoDoc = dbClient.find(it.url).firstOrNull()
-            if (searchedRepoDoc != null) anchorTextOnDoc(Jsoup.parse(searchedRepoDoc.content))
-            else null
+    private suspend fun getBacklinkAnchorText() =
+        pagerankPage.backLinks.distinctBy { it.url }.sortedByDescending { it.rank.last() }.take(420).mapNotNull {
+            val find = dbClient.find(it.url).firstOrNull() ?: return@mapNotNull null
+            if (it.doesForward) {
+                ComputeDoc(it, find, dbClient, totalDocsCount).compute().content.anchors.joinToString(" ")
+            } else {
+                anchorTextOnDoc(Jsoup.parse(find.content))
+            }
         }
 
     private fun anchorTextOnDoc(doc: Document): String {
@@ -39,7 +40,7 @@ class ComputeDoc(
     }
 
 
-    suspend fun compute(totalDocsCount: Int): Page.Page {
+    suspend fun compute(): Page.Page {
         return Page.Page(pagerankPage.url,
             Page.Ranks(pagerankPage.rank.last(), pagerankPage.rank.last() * totalDocsCount),
             Page.Content(

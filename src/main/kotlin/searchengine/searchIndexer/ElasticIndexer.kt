@@ -11,9 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 class ElasticIndexer(
-    private val pagerank: Pagerank,
-    private val repository: PageRepository.Client,
-    private val elastic: Elastic
+    private val pagerank: Pagerank, private val repository: PageRepository.Client, private val elastic: Elastic
 ) {
     suspend fun index() = coroutineScope {
         try {
@@ -28,14 +26,14 @@ class ElasticIndexer(
 
 
         val flow = forEachPagerankPage(pagerank.getAll(), repository)
-        for (i in 1..(Runtime.getRuntime().availableProcessors() * 1.5).roundToInt()) {
+        for (i in 1..(Runtime.getRuntime().availableProcessors())) {
             launch(Dispatchers.Unconfined) {
                 flow.consumeEach {
 //                    println("$i Indexing ${count.incrementAndGet()}/$totalDocsCount: ${it.second.url}")
                     if (count.getAndIncrement() % 200 == 0) println("At ${count.get()}/$totalDocsCount")
                     try {
                         elastic.add(
-                            ComputeDoc(it.second, it.first, repository).compute(totalDocsCount)
+                            ComputeDoc(it.second, it.first, repository, totalDocsCount).compute()
                         )
                     } catch (e: Exception) {
                         println("Error indexing ${it.second.url}")
@@ -51,13 +49,11 @@ class ElasticIndexer(
 
 @OptIn(ExperimentalCoroutinesApi::class)
 fun CoroutineScope.forEachPagerankPage(
-    pagerank: Array<Pagerank.PagerankPage>,
-    repository: PageRepository.Client
-): ReceiveChannel<Pair<PageRepository.Page?, Pagerank.PagerankPage>> =
-    produce(capacity = 4) {
-        pagerank.forEach {
-            val page = repository.find(it.url).firstOrNull()
-            send(page to it)
-        }
-
+    pagerank: Array<Pagerank.PagerankPage>, repository: PageRepository.Client
+): ReceiveChannel<Pair<PageRepository.Page?, Pagerank.PagerankPage>> = produce(capacity = 4) {
+    pagerank.forEach {
+        val page = repository.find(it.url).firstOrNull()
+        send(page to it)
     }
+
+}
