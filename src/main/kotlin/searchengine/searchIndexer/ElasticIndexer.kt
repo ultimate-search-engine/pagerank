@@ -8,6 +8,7 @@ import libraries.Elastic
 import libraries.PageRepository
 import searchengine.pagerank.Pagerank
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 
 class ElasticIndexer(
     private val pagerank: Pagerank,
@@ -27,13 +28,20 @@ class ElasticIndexer(
 
 
         val flow = forEachPagerankPage(pagerank.getAll(), repository)
-        for (i in 1..6) {
+        for (i in 1..(Runtime.getRuntime().availableProcessors() * 1.5).roundToInt()) {
             launch(Dispatchers.Unconfined) {
                 flow.consumeEach {
 //                    println("$i Indexing ${count.incrementAndGet()}/$totalDocsCount: ${it.second.url}")
                     if (count.getAndIncrement() % 200 == 0) println("At ${count.get()}/$totalDocsCount")
-                    val page = ComputeDoc(it.second, it.first, repository).compute(totalDocsCount)
-                    elastic.add(page)
+                    try {
+                        elastic.add(
+                            ComputeDoc(it.second, it.first, repository).compute(totalDocsCount)
+                        )
+                    } catch (e: Exception) {
+                        println("Error indexing ${it.second.url}")
+                        delay(10_000)
+                        e.printStackTrace()
+                    }
                 }
             }
         }
