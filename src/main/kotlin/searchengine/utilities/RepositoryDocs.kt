@@ -16,20 +16,19 @@ import kotlin.time.measureTimedValue
 fun CoroutineScope.repositoryDocs(client: PageRepository.Client): ReceiveChannel<PageRepository.Page> =
     produce(capacity = 300) {
         val limit = DocCount
-        val batch = DocBatchSize
 
         var lastUrl: String? = null
         var ctr = 0
 
         while (ctr < limit) {
             val (finds: List<PageRepository.Page>, duration: Duration) = measureTimedValue {
-                client.findAfter(lastUrl, batch, code = 200)
+                client.findAfter(lastUrl, DocBatchSize, code = 200)
             }
             if (finds.isEmpty()) break
             finds.forEach { send(it) }
             lastUrl = finds.last().finalUrl
             ctr += finds.size
-            println("${(ctr.toDouble() / limit.toDouble() * 100.0).roundToInt()}%, took: ${duration.inWholeMinutes}min ${duration.inWholeSeconds % 60}s")
+            println("$ctr docs - ${(ctr.toDouble() / limit.toDouble() * 100.0).roundToInt()}%, took: ${duration.inWholeMinutes}min ${duration.inWholeSeconds % 60}s")
         }
 
     }

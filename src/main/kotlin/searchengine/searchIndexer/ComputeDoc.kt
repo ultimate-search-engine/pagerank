@@ -10,17 +10,21 @@ import searchengine.pagerank.cUrl
 
 class ComputeDoc(
     private val pagerankPage: Pagerank.PagerankPage,
-    private val repoDoc: PageRepository.Page?,
+    repoDoc: PageRepository.Page?,
     private val dbClient: PageRepository.Client
 ) {
     private val parse = if (repoDoc != null) Jsoup.parse(repoDoc.content) else null
     private val targetUrls = pagerankPage.backLinks.map { it.url } + pagerankPage.url
 
-    private suspend fun getBacklinkAnchorText() = pagerankPage.backLinks.distinctBy { it.url }.mapNotNull {
-        val searchedRepoDoc = dbClient.find(it.url).firstOrNull()
-        if (searchedRepoDoc != null) anchorTextOnDoc(Jsoup.parse(searchedRepoDoc.content))
-        else null
-    }
+    private suspend fun getBacklinkAnchorText() = pagerankPage.backLinks
+        .distinctBy { it.url }
+        .sortedByDescending { it.rank.last() }
+        .take(690)
+        .mapNotNull {
+            val searchedRepoDoc = dbClient.find(it.url).firstOrNull()
+            if (searchedRepoDoc != null) anchorTextOnDoc(Jsoup.parse(searchedRepoDoc.content))
+            else null
+        }
 
     private fun anchorTextOnDoc(doc: Document): String {
         val links = doc.select("a")
@@ -31,7 +35,7 @@ class ComputeDoc(
             } catch (e: Exception) {
                 null
             }
-        }.filter { it.isNotBlank() }.joinToString(" ")
+        }.filter { it.count() >= 3 }.joinToString(" ")
     }
 
 

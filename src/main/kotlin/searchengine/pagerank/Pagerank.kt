@@ -32,6 +32,7 @@ suspend fun handlePagerankBuild(
 
         everyLink.add(Url(it.finalUrl).cUrl())
         it.targetUrl.forEach(everyLink::add)
+        everyLink.add(it.finalUrl)
     }
     println("Found ${everyLink.size} total items")
 
@@ -52,24 +53,25 @@ class Pagerank(everyLink: Set<String>) {
     }.sortedBy { it.url }.toTypedArray()
 
 
-    private tailrec fun Array<PagerankPage>.binarySearchLinks(
-        url: Url,
-        x: Int = (allLinks.size - 1) / 2,
-        from: Int = 0,
-        to: Int = allLinks.size - 1
+    private fun binarySearchLinks(
+        element: String,
     ): Int? {
-        if (x >= allLinks.size) return null
-        val comparable = url.cUrl().compareTo(Url(allLinks[x].url).cUrl())
-//        println("comparable: $comparable, x: $x, from: $from, to: $to")
+        var index = 0
+        var end = allLinks.size - 1
 
-        return if (from > to) null
-        else if (comparable < 0) binarySearchLinks(url, (from + x) / 2, from, x - 1)
-        else if (comparable > 0) binarySearchLinks(url, (x + to) / 2 + 1, x + 1, to)
-        else if (url.cUrl() == allLinks[x].url) x
-        else {
-            println("null")
-            null
+        while (index <= end) {
+
+            val center: Int = (index + end) / 2
+
+            if (element == allLinks[center].url) {
+                return center
+            } else if (element < allLinks[center].url) {
+                end = center - 1
+            } else if (element > allLinks[center].url) {
+                index = center + 1
+            }
         }
+        return null
     }
 
     @OptIn(ExperimentalTime::class)
@@ -80,12 +82,20 @@ class Pagerank(everyLink: Set<String>) {
                 val parsed = Jsoup.parse(doc.content)
                 val links = parsed.pageLinks(Url(doc.finalUrl))
 
-                val finalLinkObj = allLinks[allLinks.binarySearchLinks(Url(doc.finalUrl))!!]
+                val finalLinkObj = get(doc.finalUrl)
+                if (finalLinkObj == null) {
+                    println("finalLinkObj is null for ${doc.finalUrl}")
+                    return@measureTimedValue
+                }
                 assert(finalLinkObj.url == doc.finalUrl)
 
                 doc.targetUrl.forEach { targetUrl ->
                     if (Url(targetUrl).cUrl() != Url(doc.finalUrl).cUrl()) {
-                        val targetPage = get(targetUrl)!!
+                        val targetPage = get(targetUrl)
+                        if (targetPage == null) {
+                            println("targetPage is null for $targetUrl")
+                            return@measureTimedValue
+                        }
                         targetPage.doesForward = true
                         targetPage.forwardLinkCount += 1
                         addBacklink(finalLinkObj, targetPage)
@@ -110,7 +120,7 @@ class Pagerank(everyLink: Set<String>) {
 
 
     infix fun get(url: String): PagerankPage? {
-        val index = allLinks.binarySearchLinks(Url(url)) ?: return null
+        val index = binarySearchLinks(url) ?: return null
         return if (0 <= index && index < allLinks.size) allLinks[index] else null
     }
 
@@ -128,9 +138,7 @@ class Pagerank(everyLink: Set<String>) {
         var highestDeviation = 0.0
         allLinks.forEach {
             val rank = computePagerankOnDoc(it, sinkRank)
-            if (rank == Double.POSITIVE_INFINITY) {
-                throw Exception("Rank is infinite")
-            }
+            if (rank == Double.POSITIVE_INFINITY) throw Exception("Rank is infinite")
 
             val deviation = abs(it.rank.last() - rank)
             if (deviation > highestDeviation) highestDeviation = deviation
@@ -153,7 +161,7 @@ class Pagerank(everyLink: Set<String>) {
         }
         val metrics = PagerankMetrics(deviation, (prevMetrics?.iteration ?: 0) + 1, duration)
         println("Iteration ${metrics.iteration} deviation: ${metrics.highestDeviation} duration: ${metrics.time.inWholeMilliseconds}ms")
-        return if (deviation > Precision && metrics.iteration < 200) run(metrics) else metrics
+        return if (deviation > Precision && metrics.iteration < 500) run(metrics) else metrics
     }
 
     data class PagerankMetrics(
