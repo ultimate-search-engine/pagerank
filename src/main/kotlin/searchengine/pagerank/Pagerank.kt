@@ -26,7 +26,7 @@ suspend fun handlePagerankBuild(
         if (useUncrawledLinks) {
             val parse = Jsoup.parse(it.content)
             val links = parse.pageLinks(Url(it.finalUrl))
-            if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
+//            if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
             links.forEach(everyLink::add)
         }
 
@@ -77,25 +77,17 @@ class Pagerank(everyLink: Set<String>) {
     @OptIn(ExperimentalTime::class)
     suspend fun entangleDocs(db: PageRepository.Client) = coroutineScope {
         repositoryDocs(db).consumeEach { doc ->
-            val time: TimedValue<Unit> = measureTimedValue {
-
+            measureTimedValue {
                 val parsed = Jsoup.parse(doc.content)
                 val links = parsed.pageLinks(Url(doc.finalUrl))
 
-                val finalLinkObj = get(doc.finalUrl)
-                if (finalLinkObj == null) {
-                    println("finalLinkObj is null for ${doc.finalUrl}")
-                    return@measureTimedValue
-                }
-                assert(finalLinkObj.url == doc.finalUrl)
+                val finalLinkObj = get(doc.finalUrl) ?: return@measureTimedValue
 
+                val finalUrl = Url(doc.finalUrl).cUrl()
                 doc.targetUrl.forEach { targetUrl ->
-                    if (Url(targetUrl).cUrl() != Url(doc.finalUrl).cUrl()) {
-                        val targetPage = get(targetUrl)
-                        if (targetPage == null) {
-                            println("targetPage is null for $targetUrl")
-                            return@measureTimedValue
-                        }
+                    if (Url(targetUrl).cUrl() != finalUrl) {
+                        val targetPage = get(targetUrl) ?: return@measureTimedValue
+
                         targetPage.doesForward = true
                         targetPage.forwardLinkCount += 1
                         addBacklink(finalLinkObj, targetPage)
@@ -105,13 +97,11 @@ class Pagerank(everyLink: Set<String>) {
                 links.forEach { link ->
                     val linkedPage = get(link)
                     if (linkedPage != null) {
-                        assert(linkedPage.url == link)
                         finalLinkObj.forwardLinkCount += 1
                         addBacklink(linkedPage, finalLinkObj)
                     }
                 }
             }
-            if (time.duration.inWholeSeconds > 0) println("${doc.finalUrl} took ${time.duration}")
         }
     }
 
@@ -161,7 +151,7 @@ class Pagerank(everyLink: Set<String>) {
         }
         val metrics = PagerankMetrics(deviation, (prevMetrics?.iteration ?: 0) + 1, duration)
         println("Iteration ${metrics.iteration} deviation: ${metrics.highestDeviation} duration: ${metrics.time.inWholeMilliseconds}ms")
-        return if (deviation > Precision && metrics.iteration < 500) run(metrics) else metrics
+        return if (deviation > Precision && metrics.iteration < 300) run(metrics) else metrics
     }
 
     data class PagerankMetrics(

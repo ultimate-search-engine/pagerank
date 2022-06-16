@@ -4,31 +4,40 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.delay
 import libraries.PageRepository
 import searchengine.DocBatchSize
 import searchengine.DocCount
 import kotlin.math.roundToInt
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
+import kotlin.time.TimedValue
 import kotlin.time.measureTimedValue
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 fun CoroutineScope.repositoryDocs(client: PageRepository.Client): ReceiveChannel<PageRepository.Page> =
-    produce(capacity = 300) {
+    produce(capacity = DocBatchSize + 1) {
         val limit = DocCount
 
         var lastUrl: String? = null
         var ctr = 0
 
         while (ctr < limit) {
-            val (finds: List<PageRepository.Page>, duration: Duration) = measureTimedValue {
-                client.findAfter(lastUrl, DocBatchSize, code = 200)
+            val value: TimedValue<Unit> = measureTimedValue {
+                try {
+                    val finds: List<PageRepository.Page> = client.findAfter(lastUrl, DocBatchSize)
+                    if (finds.isEmpty()) return@produce
+                    finds.forEach { if (it.statusCode == 200) send(it) }
+                    lastUrl = finds.last().finalUrl
+                    ctr += finds.size
+                } catch (e: Exception) {
+                    println("Error: $e")
+                    delay(10_000)
+                }
             }
-            if (finds.isEmpty()) break
-            finds.forEach { send(it) }
-            lastUrl = finds.last().finalUrl
-            ctr += finds.size
-            println("$ctr docs - ${(ctr.toDouble() / limit.toDouble() * 100.0).roundToInt()}%, took: ${duration.inWholeMinutes}min ${duration.inWholeSeconds % 60}s")
+            println(
+                "$ctr docs - ${(ctr.toDouble() / limit.toDouble() * 100.0).roundToInt()}%, took: ${value.duration.inWholeMinutes}min ${value.duration.inWholeSeconds % 60}s"
+            )
         }
 
     }

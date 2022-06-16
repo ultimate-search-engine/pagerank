@@ -18,7 +18,7 @@ fun Document.pageLinks(url: Url): List<String> {
                 null
             }
         } catch (e: Exception) {
-            println("Error parsing $href")
+//            println("Error parsing $href")
             null
         }
     }

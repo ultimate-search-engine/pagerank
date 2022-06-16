@@ -19,9 +19,10 @@ val elasticCredentials = Credentials("elastic", "changeme")
 const val elasticIndexName = "web1"
 
 const val d = 0.85
-const val Precision = 0.0 // lower is better, iterations are limited to 500
+const val Precision = 0.0 // lower is better, iterations are limited to 300
 const val DocCount = Int.MAX_VALUE
 const val DocBatchSize = 400
+const val BacklinkAnchorTextMaxCount = 1e2
 
 
 @OptIn(ExperimentalTime::class)

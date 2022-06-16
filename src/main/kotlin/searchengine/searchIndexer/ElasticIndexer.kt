@@ -8,7 +8,6 @@ import libraries.Elastic
 import libraries.PageRepository
 import searchengine.pagerank.Pagerank
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.roundToInt
 
 class ElasticIndexer(
     private val pagerank: Pagerank, private val repository: PageRepository.Client, private val elastic: Elastic
@@ -30,10 +29,10 @@ class ElasticIndexer(
             launch(Dispatchers.Unconfined) {
                 flow.consumeEach {
 //                    println("$i Indexing ${count.incrementAndGet()}/$totalDocsCount: ${it.second.url}")
-                    if (count.getAndIncrement() % 200 == 0) println("At ${count.get()}/$totalDocsCount")
+                    if (count.incrementAndGet() % 200 == 0) println("At ${count.get()}/$totalDocsCount")
                     try {
-                        elastic.add(
-                            ComputeDoc(it.second, it.first, repository, totalDocsCount).compute()
+                        if (it.first != null) elastic.add(
+                            ComputeDoc(it.second, it.first!!, repository, totalDocsCount).compute()
                         )
                     } catch (e: Exception) {
                         println("Error indexing ${it.second.url}")
@@ -50,10 +49,19 @@ class ElasticIndexer(
 @OptIn(ExperimentalCoroutinesApi::class)
 fun CoroutineScope.forEachPagerankPage(
     pagerank: Array<Pagerank.PagerankPage>, repository: PageRepository.Client
-): ReceiveChannel<Pair<PageRepository.Page?, Pagerank.PagerankPage>> = produce(capacity = 4) {
-    pagerank.forEach {
-        val page = repository.find(it.url).firstOrNull()
-        send(page to it)
-    }
+): ReceiveChannel<Pair<PageRepository.Page?, Pagerank.PagerankPage>> =
+    produce(capacity = (Runtime.getRuntime().availableProcessors()) * 2) {
+        pagerank.forEach {
+            if (it.doesForward) {
+//            println("forwards ${it.url}")
+                return@forEach
+            }
+            val page = try {
+                repository.find(it.url)
+            } catch (e: Exception) {
+                null
+            }
+            send(page to it)
+        }
 
-}
+    }
