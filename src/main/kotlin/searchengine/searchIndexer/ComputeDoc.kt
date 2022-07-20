@@ -1,6 +1,7 @@
 package searchengine.searchIndexer
 
 import io.ktor.http.*
+import io.ktor.util.*
 import libraries.Page
 import libraries.PageRepository
 import org.jsoup.Jsoup
@@ -23,7 +24,7 @@ class ComputeDoc(
     }
     private val targetUrls = pagerankPage.backLinks.map { it.url } + pagerankPage.url
 
-    private suspend fun getBacklinkAnchorText(): List<String> {
+    private suspend fun getBacklinkAnchors(): List<Anchor> {
         var ctr = 0
         return backDocs().sortedByDescending { it.rank.last() }.mapNotNull { pagerankPage ->
             if (ctr >= BacklinkAnchorTextMaxCount) null
@@ -34,7 +35,7 @@ class ComputeDoc(
                     null
                 } ?: return@mapNotNull null
 
-                val anchorText = anchorTextOnDoc(Jsoup.parse(dbDoc.content)).filter { it.count() in 3..72 }
+                val anchorText = anchorTextOnDoc(Jsoup.parse(dbDoc.content)).filter { it.anchor.count() in 3..72 }
                 ctr += anchorText.size
                 anchorText
             }
@@ -45,32 +46,47 @@ class ComputeDoc(
         if (it.doesForward) it.backLinks else mutableListOf(it)
     }.flatten().distinctBy { it.url }
 
-    private fun anchorTextOnDoc(doc: Document): List<String> {
+    private fun anchorTextOnDoc(doc: Document): List<Anchor> {
         val links = doc.select("a")
-        return meldSimilar(links.mapNotNull {
+        return links.mapNotNull {
             try {
-                val url = Url(it.attr("href")).cUrl()
-                if (url in targetUrls) it.text() else null
+                val url = Url(it.attr("href"))
+                if (url.cUrl() in targetUrls) Anchor(url, it.text()) else null
             } catch (e: Exception) {
                 null
             }
-        }, .80)
+        }
     }
+
+    data class Anchor(val url: Url, val anchor: String)
 
 
     suspend fun compute(): Page.Page {
         val url = Url(pagerankPage.url)
+        val backlinkAnchors = getBacklinkAnchors()
+        val backlinkParameters = backlinkAnchors.map { it.url.parameters.toMap().values.flatten() }.flatten()
+        val urlParametersUnique = meldSimilar(backlinkParameters.distinct())
+
         return Page.Page(Page.Address(
             pagerankPage.url,
             meldSimilar(url.pathSegments.filter { it.count() >= 3 }.map { it.split(" ", "-", "_") }.flatten(), .80),
             url.host,
         ),
-            Page.Ranks(pagerankPage.rank.last(), pagerankPage.rank.last() * totalDocsCount),
+            Page.Ranks(
+                pagerankPage.rank.last(),
+                pagerankPage.rank.last() * totalDocsCount,
+                urlLength = url.cUrl().count(),
+                urlPathLength = url.fullPath.count(),
+                urlSegmentsCount = url.pathSegments.count(),
+                urlParameterCount = backlinkParameters.count() + 1,
+                urlParameterCountUnique = urlParametersUnique.size + 1,
+                urlParameterCountUniquePercent = (urlParametersUnique.size.toDouble() + 1) / (backlinkParameters.count() + 1),
+            ),
             Page.Content(
                 parse?.title() ?: "",
                 parse?.select("meta[name=description]")?.attr("content") ?: "",
                 listOf(), // possibly more words that may be relevant
-                getBacklinkAnchorText(), // inner text of backlinks to this page
+                backlinkAnchors.map {it.anchor}, // inner text of backlinks to this page
                 parse?.select("b")?.map { it.text() } ?: listOf(),
                 Page.Headings(meldSimilar(parse?.select("h1")?.map { it.text() } ?: listOf(), .80),
                     meldSimilar(parse?.select("h2")?.map { it.text() } ?: listOf(), .80),
