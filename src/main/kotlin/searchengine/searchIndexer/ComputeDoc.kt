@@ -81,6 +81,7 @@ class ComputeDoc(
                 urlParameterCount = backlinkParameters.count() + 1,
                 urlParameterCountUnique = urlParametersUnique.size + 1,
                 urlParameterCountUniquePercent = (urlParametersUnique.size.toDouble() + 1) / (backlinkParameters.count() + 1),
+                totalDocsCount
             ),
             Page.Content(
                 parse?.title() ?: "",

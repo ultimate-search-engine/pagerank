@@ -36,7 +36,7 @@ fun CoroutineScope.repositoryDocs(client: PageRepository.Client): ReceiveChannel
                 }
             }
             println(
-                "$ctr docs - ${(ctr.toDouble() / limit.toDouble() * 100.0).roundToInt()}%, took: ${value.duration.inWholeMinutes}min ${value.duration.inWholeSeconds % 60}s"
+                "$ctr docs, took: ${value.duration.inWholeMinutes}min ${value.duration.inWholeSeconds % 60}s"
             )
         }
 

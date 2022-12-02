@@ -24,16 +24,16 @@ suspend fun handlePagerankBuild(
 
     repositoryDocs(dbClient).consumeEach {
         if (useUncrawledLinks) {
-            val parse = Jsoup.parse(it.content)
-            val links = parse.pageLinks(Url(it.finalUrl))
-//            if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
-            links.forEach(everyLink::add)
+//            val parse = Jsoup.parse(it.content)
+//            val links = parse.pageLinks(Url(it.finalUrl))
+////            if (links.size > 5000) println("${it.finalUrl} has ${links.size} links")
+//            links.forEach(everyLink::add)
         }
 
         everyLink.add(Url(it.finalUrl).cUrl())
         it.targetUrl.forEach(everyLink::add)
-        everyLink.add(it.finalUrl)
     }
+
     println("Found ${everyLink.size} total items")
 
     val pagerank = Pagerank(everyLink)
@@ -169,4 +169,8 @@ class Pagerank(everyLink: Set<String>) {
 }
 
 
-fun Url.cUrl(): String = "${this.protocol.name}://${this.host}${this.encodedPath}"
+fun Url.cUrl(): String {
+    val url = "${this.protocol.name}://${this.host}${this.encodedPath}"
+    if (url.endsWith("/")) return url.dropLast(1)
+    return url
+}

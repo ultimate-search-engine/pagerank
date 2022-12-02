@@ -24,6 +24,9 @@ dependencies {
 
     implementation("io.ktor:ktor-server-core-jvm:$ktor_version")
     implementation("io.ktor:ktor-server-netty-jvm:$ktor_version")
+    implementation("io.ktor:ktor-client-core:$ktor_version")
+    implementation("io.ktor:ktor-client-cio:$ktor_version")
+    implementation("io.ktor:ktor-client-serialization:$ktor_version")
 //    implementation("ch.qos.logback:logback-classic:$logback_version")
     implementation("org.jsoup:jsoup:1.14.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.3.2")
@@ -38,6 +41,8 @@ dependencies {
     implementation("org.litote.kmongo:kmongo-coroutine:4.5.1")
 
     implementation("co.elastic.clients:elasticsearch-java:8.1.1")
+
+    implementation("io.github.cdimascio:dotenv-kotlin:6.4.0")
 
     testImplementation("io.ktor:ktor-server-tests-jvm:$ktor_version")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlin_version")
