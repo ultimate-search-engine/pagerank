@@ -18,8 +18,8 @@ val dotenv = dotenv()
 
 val dbHost: String = (dotenv["DB_HOST"] ?: "").ifEmpty { "localhost" }
 val dbPort: String = (dotenv["DB_PORT"] ?: "").ifEmpty { "27017" }
-val dbUsername = (dotenv["DB_USERNAME"] ?: "").ifEmpty { "root" }
-val dbPassword = (dotenv["DB_PASSWORD"] ?: "").ifEmpty { "root" }
+val dbUsername = (dotenv["DB_USERNAME"] ?: "").ifEmpty { "production_user" }
+val dbPassword = (dotenv["DB_PASSWORD"] ?: "").ifEmpty { "use235" }
 
 val esHost: String = (dotenv["ES_HOST"] ?: "").ifEmpty { "localhost" }
 val esPort: Int = (dotenv["ES_PORT"] ?: "").ifEmpty { "9200" }.toInt()
@@ -30,7 +30,7 @@ val BacklinkAnchorTextMaxCount: Int = (dotenv["BACKLINK_ANCHOR_TEXT_MAX_COUNT"] 
 
 
 val mongoAddress =
-    if (dbUsername.isNotEmpty()) "mongodb://$dbUsername:$dbPassword@$dbHost:$dbPort/ency?authSource=admin" else "mongodb://$dbHost:$dbPort"
+    "mongodb://$dbHost:$dbPort"
 const val mongoIndexName = "ency"
 val elasticAddress = Address(esHost, esPort)
 val elasticCredentials = Credentials(esUsername, esPassword)

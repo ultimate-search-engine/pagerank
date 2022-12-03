@@ -1,6 +1,7 @@
 build
 .idea
 .gradle
+.env*
 
 *DS_Store
 
