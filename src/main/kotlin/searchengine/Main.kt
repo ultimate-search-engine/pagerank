@@ -29,8 +29,7 @@ val esPassword: String = (dotenv["ES_PASSWORD"] ?: "").ifEmpty { "changeme" }
 val BacklinkAnchorTextMaxCount: Int = (dotenv["BACKLINK_ANCHOR_TEXT_MAX_COUNT"] ?: "").ifEmpty { "5" }.toInt()
 
 
-val mongoAddress =
-    "mongodb://$dbHost:$dbPort"
+val mongoAddress = if (dbUsername.isNotEmpty()) "mongodb://$dbUsername:$dbPassword@$dbHost:$dbPort" else "mongodb://$dbHost:$dbPort"
 const val mongoIndexName = "ency"
 val elasticAddress = Address(esHost, esPort)
 val elasticCredentials = Credentials(esUsername, esPassword)
